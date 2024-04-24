@@ -18,7 +18,9 @@ use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::storage::commit_uri_from_version;
 use deltalake_core::storage::StorageOptions;
 use deltalake_core::table::builder::ensure_table_uri;
-use deltalake_core::{DeltaOps, DeltaTable, DeltaTableBuilder};
+use deltalake_core::{
+    operations::transaction::TransactionError, DeltaOps, DeltaTable, DeltaTableBuilder,
+};
 use deltalake_test::utils::*;
 use lazy_static::lazy_static;
 use object_store::path::Path;
@@ -179,6 +181,49 @@ async fn test_repair_on_load() -> TestResult<()> {
     // table should fix the broken entry while loading a specific version
     assert_eq!(table.version(), 1);
     validate_lock_table_state(&table, 1).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_repair_abort_entry() -> TestResult<()> {
+    let context = IntegrationContext::new(Box::new(S3Integration::default()))?;
+    let client = make_client()?;
+    let table = prepare_table(&context, "repair_abort").await?;
+    let options: StorageOptions = OPTIONS.clone().into();
+    let log_store: S3DynamoDbLogStore = S3DynamoDbLogStore::try_new(
+        ensure_table_uri(table.table_uri())?,
+        options.clone(),
+        &S3_OPTIONS,
+        std::sync::Arc::new(table.object_store()),
+    )?;
+
+    let entry = create_incomplete_commit_entry(&table, 1, "unfinished_commit").await?;
+
+    let read_entry = client
+        .get_latest_entry(&table.table_uri())
+        .await?
+        .expect("no latest entry!");
+
+    assert_eq!(entry, read_entry);
+
+    // Delete the temp commit file, so entry cannot be repaired
+    table.object_store().delete(&entry.temp_path).await?;
+
+    // Repair should fail because temp file was deleted
+    assert!(matches!(
+        log_store.repair_entry(&read_entry).await,
+        Err(TransactionError::LogStoreError { msg, .. }) if msg == format!(
+            "entry {} has been aborted since it cannot be repaired",
+            entry.version,
+        ),
+    ));
+
+    // The entry should have been aborted - the latest entry should be one version lower
+    if let Some(new_entry) = client.get_latest_entry(&table.table_uri()).await? {
+        assert_eq!(entry.version - 1, new_entry.version);
+    }
+
     Ok(())
 }
 
