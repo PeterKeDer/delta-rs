@@ -213,10 +213,13 @@ async fn test_repair_abort_entry() -> TestResult<()> {
     // Repair should fail because temp file was deleted
     assert!(matches!(
         log_store.repair_entry(&read_entry).await,
-        Err(TransactionError::LogStoreError { msg, .. }) if msg == format!(
-            "entry {} has been aborted since it cannot be repaired",
-            entry.version,
-        ),
+        Err(TransactionError::CommitAborted(version)) if version == entry.version,
+    ));
+
+    // Abort should be idempotent and can be retried
+    assert!(matches!(
+        log_store.repair_entry(&read_entry).await,
+        Err(TransactionError::CommitAborted(version)) if version == entry.version,
     ));
 
     // The entry should have been aborted - the latest entry should be one version lower

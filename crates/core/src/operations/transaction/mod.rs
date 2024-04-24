@@ -167,6 +167,12 @@ pub enum TransactionError {
         /// underlying error in the log store transactional layer.
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
+    /// The transaction failed because we aborted the commit
+    /// Currently used by DynamoDB log store to handle entries that cannot be repaired,
+    /// e.g. when the temp commit file is deleted before moved
+    #[error("Commit aborted: {0}")]
+    CommitAborted(i64),
 }
 
 impl From<TransactionError> for DeltaTableError {

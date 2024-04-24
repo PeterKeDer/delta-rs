@@ -109,7 +109,7 @@ impl S3DynamoDbLogStore {
                             warn!("It looks like the {}.json has already been moved, we got 404 from ObjectStorage.", entry.version);
                             self.try_complete_entry(entry, false).await
                         }
-                        Err(err @ ObjectStoreError::NotFound { .. }) => {
+                        Err(ObjectStoreError::NotFound { .. }) => {
                             // Can't find both the temp commit and `N.json`, abort the commit by deleting entry
                             warn!(
                                 "Trying to abort commit version {} since it cannot be repaired",
@@ -118,13 +118,7 @@ impl S3DynamoDbLogStore {
                             self.abort_commit_entry(entry.version, &entry.temp_path)
                                 .await?;
 
-                            Err(TransactionError::LogStoreError {
-                                msg: format!(
-                                    "entry {} has been aborted since it cannot be repaired",
-                                    entry.version
-                                ),
-                                source: Box::new(err),
-                            })
+                            Err(TransactionError::CommitAborted(entry.version))
                         }
                         Err(err) => Err(err.into()),
                     };
@@ -203,7 +197,7 @@ impl LogStore for S3DynamoDbLogStore {
                 source: Box::new(err),
             })?;
         if let Some(entry) = entry {
-            self.repair_entry(&entry).await?;
+            repaired_or_aborted(self.repair_entry(&entry).await)?;
         }
         Ok(())
     }
@@ -214,7 +208,7 @@ impl LogStore for S3DynamoDbLogStore {
             .get_commit_entry(&self.table_path, version)
             .await;
         if let Ok(Some(entry)) = entry {
-            self.repair_entry(&entry).await?;
+            repaired_or_aborted(self.repair_entry(&entry).await)?;
         }
         read_commit_entry(&self.storage, version).await
     }
@@ -309,8 +303,12 @@ impl LogStore for S3DynamoDbLogStore {
             })?;
         // when there is a latest entry in DynamoDb, we can avoid the file listing in S3.
         if let Some(entry) = entry {
-            self.repair_entry(&entry).await?;
-            Ok(entry.version)
+            match self.repair_entry(&entry).await {
+                Ok(_) => Ok(entry.version),
+                // Latest commit was aborted, try fetching latest version again
+                Err(TransactionError::CommitAborted(_)) => self.get_latest_version(current_version).await,
+                Err(err) => Err(err.into()),
+            }
         } else {
             get_latest_version(self, current_version).await
         }
@@ -346,4 +344,13 @@ pub enum CreateLockTableResult {
     /// Table was not created because it already exists.
     /// Does not imply that the table has the correct schema.
     TableAlreadyExists,
+}
+
+/// Maps `TransactionError::CommitAborted` error resulting from `repair_entry` to Ok
+/// Used in cases where we don't care if the repairing commit is aborted
+fn repaired_or_aborted(result: Result<RepairLogEntryResult, TransactionError>) -> Result<(), TransactionError> {
+    match result {
+        Ok(_) | Err(TransactionError::CommitAborted(_)) => Ok(()),
+        Err(err) => return Err(err),
+    }
 }
