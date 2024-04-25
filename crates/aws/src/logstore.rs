@@ -8,6 +8,7 @@ use crate::storage::S3StorageOptions;
 use crate::{constants, CommitEntry, DynamoDbLockClient, UpdateLogEntryResult};
 
 use bytes::Bytes;
+use deltalake_core::storage::commit_uri_from_version;
 use deltalake_core::{ObjectStoreError, Path};
 use tracing::{debug, error, warn};
 use url::Url;
@@ -93,12 +94,34 @@ impl S3DynamoDbLogStore {
                     debug!("Successfully committed entry for version {}", entry.version);
                     return self.try_complete_entry(entry, true).await;
                 }
-                // `N.json` has already been moved, complete the entry in DynamoDb just in case
                 Err(TransactionError::ObjectStore {
                     source: ObjectStoreError::NotFound { .. },
                 }) => {
-                    warn!("It looks like the {}.json has already been moved, we got 404 from ObjectStorage.", entry.version);
-                    return self.try_complete_entry(entry, false).await;
+                    // The temp commit file no longer exists
+                    return match self
+                        .storage
+                        .as_ref()
+                        .head(&commit_uri_from_version(entry.version))
+                        .await
+                    {
+                        Ok(_) => {
+                            // `N.json` has already been moved, complete the entry in DynamoDb just in case
+                            warn!("It looks like the {}.json has already been moved, we got 404 from ObjectStorage.", entry.version);
+                            self.try_complete_entry(entry, false).await
+                        }
+                        Err(ObjectStoreError::NotFound { .. }) => {
+                            // Can't find both the temp commit and `N.json`, abort the commit by deleting entry
+                            warn!(
+                                "Trying to abort commit version {} since it cannot be repaired",
+                                entry.version
+                            );
+                            self.abort_commit_entry(entry.version, &entry.temp_path)
+                                .await?;
+
+                            Err(TransactionError::CommitAborted(entry.version))
+                        }
+                        Err(err) => Err(err.into()),
+                    };
                 }
                 Err(err) if retry == MAX_REPAIR_RETRIES => return Err(err),
                 Err(err) => {
@@ -174,7 +197,7 @@ impl LogStore for S3DynamoDbLogStore {
                 source: Box::new(err),
             })?;
         if let Some(entry) = entry {
-            self.repair_entry(&entry).await?;
+            repaired_or_aborted(self.repair_entry(&entry).await)?;
         }
         Ok(())
     }
@@ -185,7 +208,7 @@ impl LogStore for S3DynamoDbLogStore {
             .get_commit_entry(&self.table_path, version)
             .await;
         if let Ok(Some(entry)) = entry {
-            self.repair_entry(&entry).await?;
+            repaired_or_aborted(self.repair_entry(&entry).await)?;
         }
         read_commit_entry(&self.storage, version).await
     }
@@ -239,6 +262,36 @@ impl LogStore for S3DynamoDbLogStore {
         Ok(())
     }
 
+    /// Tries to abort an entry by first deleting the commit log entry, then deleting the temp commit file
+    async fn abort_commit_entry(
+        &self,
+        version: i64,
+        tmp_commit: &Path,
+    ) -> Result<(), TransactionError> {
+        self.lock_client
+            .delete_commit_entry(version, &self.table_path)
+            .await
+            .map_err(|err| match err {
+                LockClientError::ProvisionedThroughputExceeded => todo!(
+                    "deltalake-aws does not yet handle DynamoDB provisioned throughput errors"
+                ),
+                LockClientError::VersionAlreadyCompleted { version, .. } => {
+                    error!("Trying to abort a completed commit");
+                    TransactionError::LogStoreError {
+                        msg: format!("trying to abort a completed log entry: {}", version),
+                        source: Box::new(err),
+                    }
+                }
+                err => TransactionError::LogStoreError {
+                    msg: "dynamodb client failed to delete log entry".to_owned(),
+                    source: Box::new(err),
+                },
+            })?;
+
+        abort_commit_entry(&self.storage, version, tmp_commit).await?;
+        Ok(())
+    }
+
     async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
         debug!("Retrieving latest version of {self:?} at v{current_version}");
         let entry = self
@@ -250,8 +303,12 @@ impl LogStore for S3DynamoDbLogStore {
             })?;
         // when there is a latest entry in DynamoDb, we can avoid the file listing in S3.
         if let Some(entry) = entry {
-            self.repair_entry(&entry).await?;
-            Ok(entry.version)
+            match self.repair_entry(&entry).await {
+                Ok(_) => Ok(entry.version),
+                // Latest commit was aborted, try fetching latest version again
+                Err(TransactionError::CommitAborted(_)) => self.get_latest_version(current_version).await,
+                Err(err) => Err(err.into()),
+            }
         } else {
             get_latest_version(self, current_version).await
         }
@@ -287,4 +344,13 @@ pub enum CreateLockTableResult {
     /// Table was not created because it already exists.
     /// Does not imply that the table has the correct schema.
     TableAlreadyExists,
+}
+
+/// Maps `TransactionError::CommitAborted` error resulting from `repair_entry` to Ok
+/// Used in cases where we don't care if the repairing commit is aborted
+fn repaired_or_aborted(result: Result<RepairLogEntryResult, TransactionError>) -> Result<(), TransactionError> {
+    match result {
+        Ok(_) | Err(TransactionError::CommitAborted(_)) => Ok(()),
+        Err(err) => return Err(err),
+    }
 }

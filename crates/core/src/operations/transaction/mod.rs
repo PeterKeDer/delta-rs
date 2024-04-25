@@ -90,7 +90,6 @@ use crate::kernel::{
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::storage::ObjectStoreRetryExt;
 use crate::table::config::TableConfig;
 use crate::table::state::DeltaTableState;
 use crate::{crate_version, DeltaResult};
@@ -168,6 +167,12 @@ pub enum TransactionError {
         /// underlying error in the log store transactional layer.
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
+    /// The transaction failed because we aborted the commit
+    /// Currently used by DynamoDB log store to handle entries that cannot be repaired,
+    /// e.g. when the temp commit file is deleted before moved
+    #[error("Commit aborted: {0}")]
+    CommitAborted(i64),
 }
 
 impl From<TransactionError> for DeltaTableError {
@@ -559,19 +564,13 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 attempt_number += 1;
                             }
                             Err(err) => {
-                                this.log_store
-                                    .object_store()
-                                    .delete_with_retries(tmp_commit, 15)
-                                    .await?;
+                                this.log_store.abort_commit_entry(version, tmp_commit).await?;
                                 return Err(TransactionError::CommitConflict(err).into());
                             }
                         };
                     }
                     Err(err) => {
-                        this.log_store
-                            .object_store()
-                            .delete_with_retries(tmp_commit, 15)
-                            .await?;
+                        this.log_store.abort_commit_entry(version, tmp_commit).await?;
                         return Err(err.into());
                     }
                 }
