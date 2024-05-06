@@ -8,6 +8,8 @@ use object_store::{path::Path, ObjectStore};
 use super::{LogStore, LogStoreConfig};
 use crate::{operations::transaction::TransactionError, storage::ObjectStoreRef, DeltaResult};
 
+use tracing::debug;
+
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
 pub struct DefaultLogStore {
@@ -47,7 +49,16 @@ impl LogStore for DefaultLogStore {
         version: i64,
         tmp_commit: &Path,
     ) -> Result<(), TransactionError> {
+        debug!("++ Calling rename_if_not_exists ++");
         super::write_commit_entry(self.storage.as_ref(), version, tmp_commit).await
+    }
+
+    async fn abort_commit_entry(
+        &self,
+        version: i64,
+        tmp_commit: &Path,
+    ) -> Result<(), TransactionError> {
+        super::abort_commit_entry(self.storage.as_ref(), version, tmp_commit).await
     }
 
     async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
