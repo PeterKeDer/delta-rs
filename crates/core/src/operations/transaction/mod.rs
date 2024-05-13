@@ -105,7 +105,7 @@ mod state;
 pub(crate) mod test_utils;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
-pub(crate) const DEFAULT_RETRIES: usize = 15;
+pub(crate) const DEFAULT_RETRIES: usize = 100;
 
 /// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
@@ -322,7 +322,7 @@ impl Default for CommitProperties {
         Self {
             app_metadata: Default::default(),
             max_retries: DEFAULT_RETRIES,
-            create_checkpoint: true,
+            create_checkpoint: false,
         }
     }
 }
