@@ -1286,7 +1286,7 @@ impl RawDeltaTable {
 
     #[pyo3(signature = (predicate = None))]
     pub fn datafusion_read(&self, py: Python, predicate: Option<String>) -> PyResult<PyObject> {
-        let snapshot = self._table.snapshot().unwrap();
+        let snapshot = self._table.snapshot().map_err(PythonError::from)?;
         let log_store = self._table.log_store();
 
         let target_name = "table";
@@ -1295,11 +1295,11 @@ impl RawDeltaTable {
             .with_file_column(true)
             .with_parquet_pushdown(false)
             .build(&snapshot)
-            .unwrap();
+            .map_err(PythonError::from)?;
 
         let provider = Arc::new(
             DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())
-                .unwrap(),
+                .map_err(PythonError::from)?,
         );
 
         let provider = provider_as_source(provider);
@@ -1311,11 +1311,9 @@ impl RawDeltaTable {
         };
 
         let filters = match predicate {
-            Some(predicate) => vec![
-                snapshot
-                    .parse_predicate_expression(predicate, &state)
-                    .unwrap()
-            ],
+            Some(predicate) => vec![snapshot
+                .parse_predicate_expression(predicate, &state)
+                .map_err(PythonError::from)?],
             None => vec![],
         };
 
