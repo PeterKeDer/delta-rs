@@ -1285,7 +1285,12 @@ impl RawDeltaTable {
     }
 
     #[pyo3(signature = (predicate = None, columns = None))]
-    pub fn datafusion_read(&self, py: Python, predicate: Option<String>, columns: Option<Vec<&str>>) -> PyResult<PyObject> {
+    pub fn datafusion_read(
+        &self,
+        py: Python,
+        predicate: Option<String>,
+        columns: Option<Vec<&str>>,
+    ) -> PyResult<PyObject> {
         let batches = py.allow_threads(|| -> PyResult<_> {
             let snapshot = self._table.snapshot().map_err(PythonError::from)?;
             let log_store = self._table.log_store();
@@ -1307,10 +1312,13 @@ impl RawDeltaTable {
                 session.state()
             };
 
-            let filters = match predicate {
-                Some(predicate) => vec![snapshot
-                    .parse_predicate_expression(predicate, &state)
-                    .map_err(PythonError::from)?],
+            let maybe_filter = predicate
+                .map(|predicate| snapshot.parse_predicate_expression(predicate, &state))
+                .transpose()
+                .map_err(PythonError::from)?;
+
+            let filters = match &maybe_filter {
+                Some(filter) => vec![filter.clone()],
                 None => vec![],
             };
 
@@ -1320,6 +1328,11 @@ impl RawDeltaTable {
                 .unwrap();
 
             let mut df = DataFrame::new(state, plan);
+
+            if let Some(filter) = maybe_filter {
+                df = df.filter(filter).unwrap();
+            }
+
             if let Some(columns) = columns {
                 df = df.select_columns(&columns).unwrap();
             }
