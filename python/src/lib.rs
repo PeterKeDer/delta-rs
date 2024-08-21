@@ -16,15 +16,21 @@ use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use deltalake::arrow::pyarrow::ToPyArrow;
 use deltalake::arrow::record_batch::RecordBatchReader;
 use deltalake::arrow::record_batch::{RecordBatch, RecordBatchIterator};
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::datasource::memory::MemTable;
 use deltalake::datafusion::datasource::provider::TableProvider;
+use deltalake::datafusion::datasource::provider_as_source;
+use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::physical_plan::ExecutionPlan;
-use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::DeltaDataChecker;
+use deltalake::datafusion::prelude::{DataFrame, SessionContext};
+use deltalake::delta_datafusion::{
+    DataFusionMixins, DeltaDataChecker, DeltaScanConfigBuilder, DeltaSessionConfig,
+    DeltaTableProvider,
+};
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::{Action, Add, Invariant, LogicalFile, Remove, Scalar, StructType};
 use deltalake::operations::collect_sendable_stream;
@@ -1276,6 +1282,54 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    #[pyo3(signature = (predicate = None))]
+    pub fn datafusion_read(&self, py: Python, predicate: Option<String>) -> PyResult<PyObject> {
+        let snapshot = self._table.snapshot().unwrap();
+        let log_store = self._table.log_store();
+
+        let target_name = "table";
+
+        let scan_config = DeltaScanConfigBuilder::default()
+            .with_file_column(true)
+            .with_parquet_pushdown(false)
+            .build(&snapshot)
+            .unwrap();
+
+        let provider = Arc::new(
+            DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())
+                .unwrap(),
+        );
+
+        let provider = provider_as_source(provider);
+
+        let state = {
+            let config = DeltaSessionConfig::default().into();
+            let session = SessionContext::new_with_config(config);
+            session.state()
+        };
+
+        let filters = match predicate {
+            Some(predicate) => vec![
+                snapshot
+                    .parse_predicate_expression(predicate, &state)
+                    .unwrap()
+            ],
+            None => vec![],
+        };
+
+        let plan = {
+            LogicalPlanBuilder::scan_with_filters(target_name, provider, None, filters)
+                .unwrap()
+                .build()
+                .unwrap()
+        };
+
+        let target = DataFrame::new(state.clone(), plan);
+        let batches = rt().block_on(async { target.collect().await }).unwrap();
+
+        batches.to_pyarrow(py)
     }
 }
 
