@@ -162,7 +162,7 @@ class WriterProperties:
 
         if compression_level is not None and compression is None:
             raise ValueError(
-                """Providing a compression level without the compression type is not possible, 
+                """Providing a compression level without the compression type is not possible,
                              please provide the compression as well."""
             )
         if isinstance(compression, str):
@@ -1306,6 +1306,13 @@ class DeltaTable:
         metrics = self._table.repair(dry_run, custom_metadata)
         return json.loads(metrics)
 
+    def datafusion_read(
+        self,
+        predicate: Optional[str] = None,
+        columns: Optional[List[str]] = None,
+    ) -> List[pyarrow.RecordBatch]:
+        return self._table.datafusion_read(predicate, columns)
+
 
 class TableMerger:
     """API for various table `MERGE` commands."""
@@ -1856,7 +1863,7 @@ class TableAlterer:
         """
         if len(constraints.keys()) > 1:
             raise ValueError(
-                """add_constraints is limited to a single constraint addition at once for now. 
+                """add_constraints is limited to a single constraint addition at once for now.
                 Please execute add_constraints multiple times with each time a different constraint."""
             )
 
