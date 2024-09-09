@@ -68,50 +68,6 @@ impl DeltaTableState {
             self.arrow_schema()
         }
     }
-
-    /// physical arrow schema but without wrapping partitions
-    pub async fn physical_input_schema(
-        &self,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> DeltaResult<ArrowSchemaRef> {
-        if let Some(add) = self
-            .file_actions()?
-            .iter()
-            .max_by_key(|obj| obj.modification_time)
-        {
-            let file_meta = add.try_into()?;
-            let file_reader = ParquetObjectReader::new(object_store, file_meta);
-            let file_schema = ParquetRecordBatchStreamBuilder::new_with_options(
-                file_reader,
-                ArrowReaderOptions::new().with_skip_arrow_metadata(true),
-            )
-            .await?
-            .build()?
-            .schema()
-            .clone();
-
-            let table_schema = Arc::new(ArrowSchema::new(
-                self.input_schema()?
-                    .fields
-                    .clone()
-                    .into_iter()
-                    .map(|field| {
-                        // field is an &Arc<Field>
-                        let owned_field: ArrowField = field.as_ref().clone();
-                        file_schema
-                            .field_with_name(field.name())
-                            // yielded with &Field
-                            .cloned()
-                            .unwrap_or(owned_field)
-                    })
-                    .collect::<Vec<ArrowField>>(),
-            ));
-
-            Ok(table_schema)
-        } else {
-            self.input_schema()
-        }
-    }
 }
 
 pub struct AddContainer<'a> {
