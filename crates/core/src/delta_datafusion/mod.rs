@@ -49,6 +49,7 @@ use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, 
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
@@ -64,6 +65,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
     col, Expr, Extension, GetFieldAccess, GetIndexedField, LogicalPlan,
@@ -221,7 +223,7 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
                             | DataType::Binary
                             | DataType::LargeBinary => {
                                 wrap_partition_type_in_dict(field.data_type().clone())
-                            }
+                            },
                             _ => field.data_type().clone(),
                         }
                     } else {
@@ -246,6 +248,14 @@ impl DataFusionFileMixins for EagerSnapshot {
     }
 }
 
+pub(crate) fn simplify_predicate(predicate: Expr, schema: &ArrowSchema) -> datafusion_common::Result<Expr> {
+    let execution_props = ExecutionProps::new();
+    let schema = schema.clone().to_dfschema_ref()?;
+    let context = SimplifyContext::new(&execution_props).with_schema(schema);
+    let simplifier = ExprSimplifier::new(context);
+    simplifier.simplify(predicate)
+}
+
 pub(crate) fn files_matching_predicate<'a>(
     snapshot: &'a EagerSnapshot,
     filters: &[Expr],
@@ -253,6 +263,7 @@ pub(crate) fn files_matching_predicate<'a>(
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
+        let predicate = simplify_predicate(predicate.clone(), snapshot.arrow_schema()?.as_ref()).unwrap_or(predicate);
         let expr = logical_expr_to_physical_expr(predicate, snapshot.arrow_schema()?.as_ref());
         let pruning_predicate = PruningPredicate::try_new(expr, snapshot.arrow_schema()?)?;
         Ok(Either::Left(
@@ -1893,7 +1904,7 @@ mod tests {
         let file = partitioned_file_from_action(&action, &part_columns, &schema);
         let ref_file = PartitionedFile {
             object_meta: object_store::ObjectMeta {
-                location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
+                location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()),
                 last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
                 size: 10644,
                 e_tag: None,
