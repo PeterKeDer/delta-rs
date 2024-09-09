@@ -787,12 +787,12 @@ impl std::future::IntoFuture for WriteBuilder {
                 if matches!(this.mode, SaveMode::Overwrite) {
                     // Update metadata with new schema
                     let table_schema = snapshot
-                        .physical_input_schema(this.log_store.object_store().clone())
+                        .physical_arrow_schema(this.log_store.object_store().clone())
                         .await
-                        .or_else(|_| snapshot.input_schema())
+                        .or_else(|_| snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
 
-                    if schema != table_schema {
+                    if try_cast_batch(schema.fields(), table_schema.fields()).is_err() {
                         let mut metadata = snapshot.metadata().clone();
                         let delta_schema: StructType = schema.as_ref().try_into()?;
                         metadata.schema_string = serde_json::to_string(&delta_schema)?;
