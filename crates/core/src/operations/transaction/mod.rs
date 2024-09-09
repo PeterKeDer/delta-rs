@@ -563,7 +563,6 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         this.log_store
                             .abort_commit_entry(version, tmp_commit)
                             .await?;
-                        println!("Commit error: {:?}", err);
                         return Err(err.into());
                     }
                 }
