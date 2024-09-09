@@ -787,9 +787,9 @@ impl std::future::IntoFuture for WriteBuilder {
                 if matches!(this.mode, SaveMode::Overwrite) {
                     // Update metadata with new schema
                     let table_schema = snapshot
-                        .physical_arrow_schema(this.log_store.object_store().clone())
+                        .physical_input_schema(this.log_store.object_store().clone())
                         .await
-                        .or_else(|_| snapshot.arrow_schema())
+                        .or_else(|_| snapshot.input_schema())
                         .unwrap_or(schema.clone());
 
                     if schema != table_schema {
