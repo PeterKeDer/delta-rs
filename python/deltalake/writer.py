@@ -113,6 +113,7 @@ def write_deltalake(
     large_dtypes: bool = ...,
     engine: Literal["pyarrow"] = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
+    max_commit_attempts: Optional[int] = ...,
 ) -> None: ...
 
 
@@ -141,6 +142,7 @@ def write_deltalake(
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
+    max_commit_attempts: Optional[int] = ...,
 ) -> None: ...
 
 
@@ -170,6 +172,7 @@ def write_deltalake(
     engine: Literal["rust"],
     writer_properties: WriterProperties = ...,
     custom_metadata: Optional[Dict[str, str]] = ...,
+    max_commit_attempts: Optional[int] = ...,
 ) -> None: ...
 
 
@@ -205,6 +208,7 @@ def write_deltalake(
     engine: Literal["pyarrow", "rust"] = "pyarrow",
     writer_properties: Optional[WriterProperties] = None,
     custom_metadata: Optional[Dict[str, str]] = None,
+    max_commit_attempts: Optional[int] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -332,6 +336,7 @@ def write_deltalake(
                 writer_properties._to_dict() if writer_properties else None
             ),
             custom_metadata=custom_metadata,
+            max_commit_attempts=max_commit_attempts,
         )
         if table:
             table.update_incremental()
@@ -458,7 +463,7 @@ def write_deltalake(
                 raise DeltaProtocolError(
                     "This table's min_writer_version is "
                     f"{table_protocol.min_writer_version}, "
-                    f"""but this method only supports version 2 or 7 with at max these features {SUPPORTED_WRITER_FEATURES} enabled. 
+                    f"""but this method only supports version 2 or 7 with at max these features {SUPPORTED_WRITER_FEATURES} enabled.
                     Try engine='rust' instead which supports more features and writer versions."""
                 )
             if (

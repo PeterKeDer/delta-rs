@@ -675,6 +675,7 @@ impl RawDeltaTable {
         not_matched_by_source_update_predicate = None,
         not_matched_by_source_delete_predicate = None,
         not_matched_by_source_delete_all = None,
+        max_commit_attempts = None,
     ))]
     pub fn merge_execute(
         &mut self,
@@ -696,6 +697,7 @@ impl RawDeltaTable {
         not_matched_by_source_update_predicate: Option<Vec<Option<String>>>,
         not_matched_by_source_delete_predicate: Option<Vec<String>>,
         not_matched_by_source_delete_all: Option<bool>,
+        max_commit_attempts: Option<usize>,
     ) -> PyResult<String> {
         py.allow_threads(|| {
             let ctx = SessionContext::new();
@@ -727,13 +729,19 @@ impl RawDeltaTable {
                 );
             }
 
+            let mut commit_properties = CommitProperties::default();
+
             if let Some(metadata) = custom_metadata {
                 let json_metadata: Map<String, Value> =
                     metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                cmd = cmd.with_commit_properties(
-                    CommitProperties::default().with_metadata(json_metadata),
-                );
+                commit_properties = commit_properties.with_metadata(json_metadata);
             };
+
+            if let Some(max_commit_attempts) = max_commit_attempts {
+                commit_properties = commit_properties.with_max_retries(max_commit_attempts);
+            }
+
+            cmd = cmd.with_commit_properties(commit_properties);
 
             if let Some(mu_updates) = matched_update_updates {
                 if let Some(mu_predicate) = matched_update_predicate {
@@ -1649,6 +1657,7 @@ fn write_to_deltalake(
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<HashMap<String, Option<String>>>,
     custom_metadata: Option<HashMap<String, String>>,
+    max_commit_attempts: Option<usize>,
 ) -> PyResult<()> {
     py.allow_threads(|| {
         let batches = data.0.map(|batch| batch.unwrap()).collect::<Vec<_>>();
@@ -1694,12 +1703,19 @@ fn write_to_deltalake(
             builder = builder.with_configuration(config);
         };
 
+        let mut commit_properties = CommitProperties::default();
+
         if let Some(metadata) = custom_metadata {
             let json_metadata: Map<String, Value> =
                 metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            builder = builder
-                .with_commit_properties(CommitProperties::default().with_metadata(json_metadata));
+            commit_properties = commit_properties.with_metadata(json_metadata);
         };
+
+        if let Some(max_commit_attempts) = max_commit_attempts {
+            commit_properties = commit_properties.with_max_retries(max_commit_attempts);
+        }
+
+        builder = builder.with_commit_properties(commit_properties);
 
         rt().block_on(builder.into_future())
             .map_err(PythonError::from)?;

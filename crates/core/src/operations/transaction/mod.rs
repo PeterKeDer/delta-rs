@@ -104,7 +104,7 @@ mod state;
 pub(crate) mod test_utils;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
-pub(crate) const DEFAULT_RETRIES: usize = 100;
+pub(crate) const DEFAULT_RETRIES: usize = 1000;
 
 /// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
@@ -339,6 +339,12 @@ impl CommitProperties {
     /// Specify if it should create a checkpoint when the commit interval condition is met
     pub fn with_create_checkpoint(mut self, create_checkpoint: bool) -> Self {
         self.create_checkpoint = create_checkpoint;
+        self
+    }
+
+    /// Specify max retries
+    pub fn with_max_retries(mut self, max_retries: usize) -> Self {
+        self.max_retries = max_retries;
         self
     }
 }
