@@ -148,6 +148,7 @@ class RawDeltaTable:
         not_matched_by_source_update_predicate: Optional[List[Optional[str]]],
         not_matched_by_source_delete_predicate: Optional[List[str]],
         not_matched_by_source_delete_all: Optional[bool],
+        max_commit_attempts: Optional[int],
     ) -> str: ...
     def get_active_partitions(
         self, partitions_filters: Optional[FilterType] = None
@@ -203,6 +204,7 @@ def write_to_deltalake(
     storage_options: Optional[Dict[str, str]],
     writer_properties: Optional[Dict[str, Optional[str]]],
     custom_metadata: Optional[Dict[str, str]],
+    max_commit_attempts: Optional[int],
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,

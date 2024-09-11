@@ -925,6 +925,7 @@ class DeltaTable:
         writer_properties: Optional[WriterProperties] = None,
         large_dtypes: bool = True,
         custom_metadata: Optional[Dict[str, str]] = None,
+        max_commit_attempts: Optional[int] = None,
     ) -> "TableMerger":
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
@@ -987,6 +988,7 @@ class DeltaTable:
             safe_cast=not error_on_type_mismatch,
             writer_properties=writer_properties,
             custom_metadata=custom_metadata,
+            max_commit_attempts=max_commit_attempts,
         )
 
     def restore(
@@ -1327,6 +1329,7 @@ class TableMerger:
         safe_cast: bool = True,
         writer_properties: Optional[WriterProperties] = None,
         custom_metadata: Optional[Dict[str, str]] = None,
+        max_commit_attempts: Optional[int] = None,
     ):
         self.table = table
         self.source = source
@@ -1336,6 +1339,7 @@ class TableMerger:
         self.safe_cast = safe_cast
         self.writer_properties = writer_properties
         self.custom_metadata = custom_metadata
+        self.max_commit_attempts = max_commit_attempts
         self.matched_update_updates: Optional[List[Dict[str, str]]] = None
         self.matched_update_predicate: Optional[List[Optional[str]]] = None
         self.matched_delete_predicate: Optional[List[str]] = None
@@ -1824,6 +1828,7 @@ class TableMerger:
             not_matched_by_source_update_predicate=self.not_matched_by_source_update_predicate,
             not_matched_by_source_delete_predicate=self.not_matched_by_source_delete_predicate,
             not_matched_by_source_delete_all=self.not_matched_by_source_delete_all,
+            max_commit_attempts=self.max_commit_attempts,
         )
         self.table.update_incremental()
         return json.loads(metrics)
