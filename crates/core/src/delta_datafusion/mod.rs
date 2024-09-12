@@ -251,9 +251,10 @@ impl DataFusionFileMixins for EagerSnapshot {
 pub(crate) fn simplify_predicate(predicate: Expr, schema: &ArrowSchema) -> datafusion_common::Result<Expr> {
     let execution_props = ExecutionProps::new();
     let schema = schema.clone().to_dfschema_ref()?;
-    let context = SimplifyContext::new(&execution_props).with_schema(schema);
+    let context = SimplifyContext::new(&execution_props).with_schema(schema.clone());
     let simplifier = ExprSimplifier::new(context);
-    simplifier.simplify(predicate)
+    let predicate = simplifier.simplify(predicate)?;
+    simplifier.coerce(predicate, schema)
 }
 
 pub(crate) fn files_matching_predicate<'a>(
