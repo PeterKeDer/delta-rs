@@ -46,6 +46,7 @@ use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, 
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
@@ -53,7 +54,9 @@ use datafusion_common::{
     config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
     TableReference, ToDFSchema,
 };
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
 use datafusion_physical_plan::filter::FilterExec;
@@ -233,6 +236,8 @@ pub(crate) fn files_matching_predicate<'a>(
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
+        let predicate = simplify_predicate(predicate.clone(), snapshot.arrow_schema()?.as_ref())
+            .unwrap_or(predicate);
         let expr = SessionContext::new()
             .create_physical_expr(predicate, &snapshot.arrow_schema()?.to_dfschema()?)?;
         let pruning_predicate = PruningPredicate::try_new(expr, snapshot.arrow_schema()?)?;
@@ -253,6 +258,18 @@ pub(crate) fn files_matching_predicate<'a>(
     } else {
         Ok(Either::Right(snapshot.file_actions()?))
     }
+}
+
+pub(crate) fn simplify_predicate(
+    predicate: Expr,
+    schema: &ArrowSchema,
+) -> datafusion_common::Result<Expr> {
+    let execution_props = ExecutionProps::new();
+    let schema = schema.clone().to_dfschema_ref()?;
+    let context = SimplifyContext::new(&execution_props).with_schema(schema.clone());
+    let simplifier = ExprSimplifier::new(context);
+    let predicate = simplifier.coerce(predicate, &schema)?;
+    simplifier.simplify(predicate)
 }
 
 pub(crate) fn get_path_column<'a>(
@@ -1771,10 +1788,11 @@ mod tests {
     use datafusion::datasource::physical_plan::ParquetExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
-    use datafusion_expr::lit;
+    use datafusion_expr::{lit, Cast, ExprSchemable};
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use object_store::path::Path;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::ops::Deref;
 
@@ -2565,5 +2583,30 @@ mod tests {
             }
             Ok(true)
         }
+    }
+
+    #[test]
+    fn test_simplify_predicate() {
+        let schema = ArrowSchema::new(vec![Field::new("value", ArrowDataType::Int64, true)]);
+
+        // value = CAST(10 AS Int64) + 20
+        let expr = col("value").eq(Expr::Cast(Cast::new(
+            Box::new(lit::<i32>(10)),
+            arrow_schema::DataType::Int64,
+        )) + lit::<i64>(20));
+
+        let simplified_expr = simplify_predicate(expr, &schema).unwrap();
+        assert_eq!(simplified_expr, col("value").eq(lit::<i64>(30)));
+    }
+
+    #[test]
+    fn test_simplify_predicate_coerces_type() {
+        let schema = ArrowSchema::new(vec![Field::new("value", ArrowDataType::Int64, true)]);
+
+        // value is int64 but is being compared to an an i32, so its type should be coerced
+        let expr = col("value").eq(lit::<i32>(10));
+
+        let simplified_expr = simplify_predicate(expr, &schema).unwrap();
+        assert_eq!(simplified_expr, col("value").eq(lit::<i64>(10)));
     }
 }

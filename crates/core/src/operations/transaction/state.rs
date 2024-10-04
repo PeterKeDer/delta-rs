@@ -8,7 +8,9 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, ToDFSchema};
 use datafusion_expr::Expr;
 
-use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
+use crate::delta_datafusion::{
+    get_null_of_arrow_type, simplify_predicate, to_correct_scalar_value,
+};
 use crate::errors::DeltaResult;
 use crate::kernel::{Add, EagerSnapshot};
 use crate::table::state::DeltaTableState;
@@ -86,7 +88,7 @@ impl<'a> AddContainer<'a> {
     /// so evaluating expressions is inexact. However, excluded files are guaranteed (for a correct log)
     /// to not contain matches by the predicate expression.
     pub fn predicate_matches(&self, predicate: Expr) -> DeltaResult<impl Iterator<Item = &Add>> {
-        //let expr = logical_expr_to_physical_expr(predicate, &self.schema);
+        let predicate = simplify_predicate(predicate.clone(), &self.schema).unwrap_or(predicate);
         let expr = SessionContext::new()
             .create_physical_expr(predicate, &self.schema.clone().to_dfschema()?)?;
         let pruning_predicate = PruningPredicate::try_new(expr, self.schema.clone())?;
