@@ -320,7 +320,7 @@ pub struct PostCommitHookProperties {
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
     pub(crate) app_transaction: Vec<Transaction>,
-    max_retries: usize,
+    pub(crate) max_retries: usize,
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
 }

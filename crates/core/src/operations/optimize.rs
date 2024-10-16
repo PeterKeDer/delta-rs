@@ -793,8 +793,7 @@ impl MergePlan {
                 last_commit = now;
 
                 buffered_metrics.preserve_insertion_order = true;
-                let mut properties = CommitProperties::default();
-                properties.app_metadata = commit_properties.app_metadata.clone();
+                let mut properties = commit_properties.clone();
                 properties
                     .app_metadata
                     .insert("readVersion".to_owned(), self.read_table_version.into());
@@ -807,12 +806,13 @@ impl MergePlan {
                         .app_metadata
                         .insert("operationMetrics".to_owned(), map);
                 }
+                let new_max_retries = properties.max_retries + commits_made;
+                properties = properties.with_max_retries(new_max_retries);
 
                 debug!("committing {} actions", actions.len());
 
                 CommitBuilder::from(properties)
                     .with_actions(actions)
-                    .with_max_retries(DEFAULT_RETRIES + commits_made)
                     .build(
                         Some(snapshot),
                         log_store.clone(),
