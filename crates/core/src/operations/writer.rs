@@ -238,7 +238,7 @@ pub struct PartitionWriterConfig {
     /// Properties passed to underlying parquet writer
     writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk.
-    target_file_size: usize,
+    target_file_size: Option<usize>,
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
@@ -260,7 +260,6 @@ impl PartitionWriterConfig {
                 .set_created_by(format!("delta-rs version {}", crate_version()))
                 .build()
         });
-        let target_file_size = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE);
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Ok(Self {
@@ -405,9 +404,14 @@ impl PartitionWriter {
         for offset in (0..max_offset).step_by(self.config.write_batch_size) {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             self.write_batch(&batch.slice(offset, length))?;
+            // If a target file size is specified
             // flush currently buffered data to disk once we meet or exceed the target file size.
             let estimated_size = self.buffer.len() + self.arrow_writer.in_progress_size();
-            if estimated_size >= self.config.target_file_size {
+            if self
+                .config
+                .target_file_size
+                .is_some_and(|target_file_size| estimated_size >= target_file_size)
+            {
                 debug!(
                     "Writing file with estimated size {:?} to disk.",
                     estimated_size
