@@ -457,6 +457,7 @@ impl MergePlan {
         F: Future<Output = Result<ParquetReadStream, DeltaTableError>> + Send + 'static,
     {
         debug!("Rewriting files in partition: {:?}", partition_values);
+        debug!("Rewriting the files in merge bin {:?}", files);
         // First, initialize metrics
         let mut partial_actions = files
             .iter()
@@ -536,6 +537,7 @@ impl MergePlan {
             "Finished rewriting files in partition: {:?}",
             partition_values
         );
+        debug!("Rewrite actions: {:?}", partial_actions);
 
         Ok((partial_actions, partial_metrics))
     }
