@@ -2,6 +2,7 @@ mod error;
 mod features;
 mod filesystem;
 mod merge;
+mod query;
 mod schema;
 mod utils;
 
@@ -73,6 +74,7 @@ use crate::error::PythonError;
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
+use crate::query::PyQueryBuilder;
 use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 
@@ -2067,6 +2069,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<PyMergeBuilder>()?;
+    m.add_class::<PyQueryBuilder>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<PyDeltaDataChecker>()?;
     // There are issues with submodules, so we will expose them flat for now
