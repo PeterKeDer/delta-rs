@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 from deltalake._util import encode_partition_value
 from deltalake.exceptions import DeltaProtocolError
+from deltalake.query import QueryBuilder
 from deltalake.table import ProtocolVersions
 from deltalake.writer import write_deltalake
 
@@ -948,65 +949,54 @@ def test_is_deltatable_with_storage_opts():
     assert DeltaTable.is_deltatable(table_path, storage_options=storage_options)
 
 
-def test_datafusion_read_table():
+def test_read_query_builder():
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     expected = {
-        "value": ["1", "2", "3", "4", "5", "6", "7"],
-        "year": ["2020", "2020", "2020", "2021", "2021", "2021", "2021"],
-        "month": ["1", "2", "2", "4", "12", "12", "12"],
-        "day": ["1", "3", "5", "5", "4", "20", "20"],
+        "value": ["4", "5", "6", "7"],
+        "year": ["2021", "2021", "2021", "2021"],
+        "month": ["4", "12", "12", "12"],
+        "day": ["5", "4", "20", "20"],
     }
-    actual = pa.Table.from_batches(dt.datafusion_read()).sort_by("value").to_pydict()
+    actual = pa.Table.from_batches(
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("SELECT * FROM tbl WHERE year >= 2021 ORDER BY value")
+    ).to_pydict()
     assert expected == actual
 
 
-def test_datafusion_read_table_with_columns():
-    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
-    dt = DeltaTable(table_path)
-    expected = {
-        "value": ["1", "2", "3", "4", "5", "6", "7"],
-        "day": ["1", "3", "5", "5", "4", "20", "20"],
-    }
-    actual = (
-        pa.Table.from_batches(dt.datafusion_read(columns=["value", "day"]))
-        .sort_by("value")
-        .to_pydict()
+def test_read_query_builder_join_multiple_tables(tmp_path):
+    table_path = "../crates/test/tests/data/delta-0.8.0-date"
+    dt1 = DeltaTable(table_path)
+
+    write_deltalake(
+        tmp_path,
+        pa.table(
+            {
+                "date": ["2021-01-01", "2021-01-02", "2021-01-03", "2021-12-31"],
+                "value": ["a", "b", "c", "d"],
+            }
+        ),
     )
-    assert expected == actual
+    dt2 = DeltaTable(tmp_path)
 
-
-def test_datafusion_read_with_filter_on_partitioned_column():
-    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
-    dt = DeltaTable(table_path)
     expected = {
-        "value": ["1", "2", "3"],
-        "year": ["2020", "2020", "2020"],
-        "month": ["1", "2", "2"],
-        "day": ["1", "3", "5"],
+        "date": ["2021-01-01", "2021-01-02", "2021-01-03"],
+        "dayOfYear": [1, 2, 3],
+        "value": ["a", "b", "c"],
     }
-    actual = (
-        pa.Table.from_batches(dt.datafusion_read(predicate="year = '2020'"))
-        .sort_by("value")
-        .to_pydict()
-    )
-    assert expected == actual
-
-
-def test_datafusion_read_with_filter_on_multiple_columns():
-    table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
-    dt = DeltaTable(table_path)
-    expected = {
-        "value": ["4", "5"],
-        "year": ["2021", "2021"],
-        "month": ["4", "12"],
-        "day": ["5", "4"],
-    }
-    actual = (
-        pa.Table.from_batches(
-            dt.datafusion_read(predicate="year = '2021' and value < '6'")
+    actual = pa.Table.from_batches(
+        QueryBuilder()
+        .register("tbl1", dt1)
+        .register("tbl2", dt2)
+        .execute(
+            """
+            SELECT tbl2.date, tbl1.dayOfYear, tbl2.value
+            FROM tbl1
+            INNER JOIN tbl2 ON tbl1.date = tbl2.date
+            ORDER BY tbl1.date
+            """
         )
-        .sort_by("value")
-        .to_pydict()
-    )
+    ).to_pydict()
     assert expected == actual
