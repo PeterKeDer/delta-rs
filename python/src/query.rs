@@ -46,8 +46,6 @@ impl PyQueryBuilder {
     }
 
     pub fn execute(&self, py: Python, sql: &str) -> PyResult<PyObject> {
-        // TODO: does this even include pushdown filter? sesm to be a lot less code
-        // than datafusion read
         let batches = py.allow_threads(|| {
             rt().block_on(async {
                 let df = self._ctx.sql(sql).await?;
