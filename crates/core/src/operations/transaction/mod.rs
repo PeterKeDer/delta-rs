@@ -108,7 +108,7 @@ mod protocol;
 mod state;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
-pub(crate) const DEFAULT_RETRIES: usize = 15;
+pub(crate) const DEFAULT_RETRIES: usize = 100;
 
 /// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]

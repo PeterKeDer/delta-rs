@@ -451,11 +451,13 @@ impl MergePlan {
         files: MergeBin,
         object_store: ObjectStoreRef,
         read_stream: F,
+        should_split_files: bool,
     ) -> Result<(Vec<Action>, PartialMetrics), DeltaTableError>
     where
         F: Future<Output = Result<ParquetReadStream, DeltaTableError>> + Send + 'static,
     {
         debug!("Rewriting files in partition: {:?}", partition_values);
+        debug!("Rewriting the files in merge bin {:?}", files);
         // First, initialize metrics
         let mut partial_actions = files
             .iter()
@@ -491,7 +493,7 @@ impl MergePlan {
             task_parameters.file_schema.clone(),
             partition_values.clone(),
             Some(task_parameters.writer_properties.clone()),
-            Some(task_parameters.input_parameters.target_size as usize),
+            should_split_files.then_some(task_parameters.input_parameters.target_size as usize),
             None,
         )?;
         let mut writer = PartitionWriter::try_with_config(
@@ -535,6 +537,7 @@ impl MergePlan {
             "Finished rewriting files in partition: {:?}",
             partition_values
         );
+        debug!("Rewrite actions: {:?}", partial_actions);
 
         Ok((partial_actions, partial_metrics))
     }
@@ -713,6 +716,9 @@ impl MergePlan {
                         files,
                         log_store.object_store().clone(),
                         futures::future::ready(Ok(batch_stream)),
+                        // Do not split the output into multiple files because files were already
+                        // grouped by size
+                        false,
                     ));
                     util::flatten_join_error(rewrite_result)
                 })
@@ -749,6 +755,7 @@ impl MergePlan {
                             files,
                             log_store.object_store(),
                             batch_stream,
+                            true,
                         ));
                         util::flatten_join_error(rewrite_result)
                     })
