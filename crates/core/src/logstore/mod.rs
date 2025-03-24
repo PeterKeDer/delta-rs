@@ -21,12 +21,14 @@ use crate::kernel::log_segment::PathExt;
 use crate::kernel::Action;
 use crate::operations::transaction::TransactionError;
 use crate::protocol::{get_last_checkpoint, ProtocolError};
+use crate::storage::file_cache::FileCacheStorageBackend;
 use crate::storage::DeltaIOStorageBackend;
 use crate::storage::{
     commit_uri_from_version, retry_ext::ObjectStoreRetryExt, IORuntime, ObjectStoreRef,
     StorageOptions,
 };
 
+use crate::table::builder::ensure_table_uri;
 use crate::{DeltaResult, DeltaTableError};
 
 #[cfg(feature = "datafusion")]
@@ -131,6 +133,20 @@ pub fn logstore_with(
     options: impl Into<StorageOptions> + Clone,
     io_runtime: Option<IORuntime>,
 ) -> DeltaResult<LogStoreRef> {
+    let storage_options: StorageOptions = options.into();
+
+    let store = if let Some(location) = storage_options.0.get("file_cache_path") {
+        let path = ensure_table_uri(location)?.to_file_path().map_err(|_| {
+            DeltaTableError::generic(format!(
+                "Expected file_cache_path to be a valid file path: {location}",
+            ))
+        })?;
+
+        Arc::new(FileCacheStorageBackend::try_new(store, path)?)
+    } else {
+        store
+    };
+
     let scheme = Url::parse(&format!("{}://", location.scheme()))
         .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
 
@@ -142,7 +158,7 @@ pub fn logstore_with(
 
     if let Some(factory) = logstores().get(&scheme) {
         debug!("Found a logstore provider for {scheme}");
-        return factory.with_options(store, &location, &options.into());
+        return factory.with_options(store, &location, &storage_options);
     } else {
         println!("Could not find a logstore for the scheme {scheme}");
         warn!("Could not find a logstore for the scheme {scheme}");
