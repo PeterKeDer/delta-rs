@@ -33,6 +33,7 @@ use std::ops::Range;
 pub use utils::*;
 
 pub mod file;
+pub mod file_cache;
 pub mod retry_ext;
 pub mod utils;
 
