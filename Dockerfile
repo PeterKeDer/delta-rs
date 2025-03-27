@@ -1,6 +1,6 @@
 FROM --platform=linux/amd64 ghcr.io/pyo3/maturin
 
-ARG CARGO_VERSION=1.81.0
+ARG CARGO_VERSION=1.85.1
 ENV CARGO_VERSION=$CARGO_VERSION
 
 VOLUME /io
