@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
 
 use super::ObjectStoreRef;
 use dashmap::DashMap;
@@ -10,10 +10,33 @@ use object_store::{
 };
 use tokio::sync::Mutex;
 
+#[async_trait::async_trait]
+pub trait FileCachePolicy: Debug + Send + Sync + 'static {
+    fn should_use_cache(&self, _location: &Path) -> bool {
+        true
+    }
+
+    async fn should_update_cache(
+        &self,
+        cache_meta: &ObjectMeta,
+        object_store: ObjectStoreRef,
+    ) -> ObjectStoreResult<bool> {
+        let meta = object_store.head(&cache_meta.location).await?;
+        Ok(cache_meta.last_modified < meta.last_modified)
+    }
+}
+
+#[derive(Debug)]
+pub struct DefaultFileCachePolicy {}
+
+#[async_trait::async_trait]
+impl FileCachePolicy for DefaultFileCachePolicy {}
+
 #[derive(Debug)]
 pub struct FileCacheStorageBackend {
     inner: ObjectStoreRef,
     file_cache: Arc<LocalFileSystem>,
+    cache_policy: Arc<dyn FileCachePolicy>,
     // Threads must hold the lock to download the file to cache to prevent
     // multiple threads from downloading the same file at the same time.
     in_progress_files: Arc<DashMap<Path, Arc<Mutex<()>>>>,
@@ -23,10 +46,12 @@ impl FileCacheStorageBackend {
     pub fn try_new(
         inner: ObjectStoreRef,
         path: impl AsRef<std::path::Path>,
+        cache_policy: Arc<dyn FileCachePolicy>,
     ) -> ObjectStoreResult<Self> {
         Ok(Self {
             inner,
             file_cache: Arc::new(LocalFileSystem::new_with_prefix(path)?),
+            cache_policy,
             in_progress_files: Arc::new(DashMap::new()),
         })
     }
@@ -40,10 +65,6 @@ impl std::fmt::Display for FileCacheStorageBackend {
             self.inner, self.file_cache
         )
     }
-}
-
-fn should_use_cache(location: &Path) -> bool {
-    location.filename() != Some("_last_checkpoint")
 }
 
 impl FileCacheStorageBackend {
@@ -63,34 +84,45 @@ impl FileCacheStorageBackend {
         let _guard = in_progress_file.lock().await;
 
         match self.file_cache.head(location).await {
-            Ok(_) => Ok(()),
-            Err(ObjectStoreError::NotFound { .. }) => {
-                tracing::debug!("Downloading file to cache: {location:?}");
-
-                let options_without_range = GetOptions {
-                    range: None,
-                    ..options.clone()
-                };
-
-                let bytes = self
-                    .inner
-                    .get_opts(location, options_without_range)
+            Ok(meta) => {
+                if !self
+                    .cache_policy
+                    .should_update_cache(&meta, self.inner.clone())
                     .await?
-                    .bytes()
-                    .await?;
+                {
+                    tracing::debug!("Cache is up to date: {location:?}");
 
-                self.file_cache
-                    .put(location, PutPayload::from_bytes(bytes))
-                    .await?;
-
-                tracing::debug!("Finished downloading file to cache: {location:?}");
-
-                self.in_progress_files.remove(location);
-
-                Ok(())
+                    self.in_progress_files.remove(location);
+                    return Ok(());
+                }
             }
-            Err(err) => Err(err),
+            Err(ObjectStoreError::NotFound { .. }) => {}
+            Err(err) => return Err(err),
         }
+
+        tracing::debug!("Downloading file to cache: {location:?}");
+
+        let options_without_range = GetOptions {
+            range: None,
+            ..options.clone()
+        };
+
+        let bytes = self
+            .inner
+            .get_opts(location, options_without_range)
+            .await?
+            .bytes()
+            .await?;
+
+        self.file_cache
+            .put(location, PutPayload::from_bytes(bytes))
+            .await?;
+
+        tracing::debug!("Finished downloading file to cache: {location:?}");
+
+        self.in_progress_files.remove(location);
+
+        Ok(())
     }
 }
 
@@ -114,7 +146,7 @@ impl ObjectStore for FileCacheStorageBackend {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
-        if !should_use_cache(location) {
+        if !self.cache_policy.should_use_cache(location) {
             return self.inner.get_opts(location, options).await;
         }
 

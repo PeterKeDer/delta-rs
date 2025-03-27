@@ -2,12 +2,14 @@
 use std::cmp::min;
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{LazyLock, OnceLock};
+use std::time::Duration;
 use std::{cmp::max, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use delta_kernel::AsAny;
 use futures::{StreamExt, TryStreamExt};
+use humantime::parse_duration;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
@@ -21,7 +23,7 @@ use crate::kernel::log_segment::PathExt;
 use crate::kernel::Action;
 use crate::operations::transaction::TransactionError;
 use crate::protocol::{get_last_checkpoint, ProtocolError};
-use crate::storage::file_cache::FileCacheStorageBackend;
+use crate::storage::file_cache::{FileCachePolicy, FileCacheStorageBackend};
 use crate::storage::DeltaIOStorageBackend;
 use crate::storage::{
     commit_uri_from_version, retry_ext::ObjectStoreRetryExt, IORuntime, ObjectStoreRef,
@@ -126,6 +128,37 @@ pub fn logstore_for(
     Err(DeltaTableError::InvalidTableLocation(location.into()))
 }
 
+#[derive(Debug)]
+struct DeltaFileCachePolicy {
+    last_checkpoint_valid_duration: Duration,
+}
+
+impl DeltaFileCachePolicy {
+    pub fn new(last_checkpoint_valid_duration: Duration) -> Self {
+        Self {
+            last_checkpoint_valid_duration,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl FileCachePolicy for DeltaFileCachePolicy {
+    async fn should_update_cache(
+        &self,
+        cache_meta: &object_store::ObjectMeta,
+        object_store: ObjectStoreRef,
+    ) -> object_store::Result<bool> {
+        let location = &cache_meta.location;
+        if location.filename() == Some("_last_checkpoint") {
+            let meta = object_store.head(location).await?;
+            Ok(cache_meta.last_modified + self.last_checkpoint_valid_duration < meta.last_modified)
+        } else {
+            // Other delta files are always immutable, so no need to update cache
+            Ok(false)
+        }
+    }
+}
+
 /// Return the [LogStoreRef] using the given [ObjectStoreRef]
 pub fn logstore_with(
     store: ObjectStoreRef,
@@ -142,7 +175,24 @@ pub fn logstore_with(
             ))
         })?;
 
-        Arc::new(FileCacheStorageBackend::try_new(store, path)?)
+        let last_checkpoint_valid_duration = if let Some(duration_str) = storage_options
+            .0
+            .get("file_cache_last_checkpoint_valid_duration")
+        {
+            parse_duration(duration_str).map_err(|e| {
+                DeltaTableError::generic(
+                    format!("Failed to parse {duration_str} as Duration: {e}",),
+                )
+            })?
+        } else {
+            Duration::ZERO
+        };
+
+        Arc::new(FileCacheStorageBackend::try_new(
+            store,
+            path,
+            Arc::new(DeltaFileCachePolicy::new(last_checkpoint_valid_duration)),
+        )?)
     } else {
         store
     };
